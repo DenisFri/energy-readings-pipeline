@@ -34,3 +34,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    environment:
+      INGESTION_API_HOST: ingestion-api
+      INGESTION_API_PORT: "8000"
+      PROCESSING_SERVICE_HOST: processing-service
+      PROCESSING_SERVICE_PORT: "8001"
+    depends_on:
+      - ingestion-api
+      - processing-service

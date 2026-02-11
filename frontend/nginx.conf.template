@@ -1,0 +1,28 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Serve static files
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Reverse proxy — Ingestion API
+    location /api/readings {
+        proxy_pass http://${INGESTION_API_HOST}:${INGESTION_API_PORT}/readings;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Reverse proxy — Processing Service
+    location /api/sites/ {
+        proxy_pass http://${PROCESSING_SERVICE_HOST}:${PROCESSING_SERVICE_PORT}/sites/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}

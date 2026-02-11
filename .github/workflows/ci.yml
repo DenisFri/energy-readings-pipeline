@@ -54,13 +54,13 @@ jobs:
       - name: Test Ingestion API
         working-directory: ingestion-api
         run: |
-          pip install -r requirements-dev.txt
+          pip install ".[dev]"
           python -m pytest tests/ -v
 
       - name: Test Processing Service
         working-directory: processing-service
         run: |
-          pip install -r requirements-dev.txt
+          pip install ".[dev]"
           python -m pytest tests/ -v
 
   docker-build:

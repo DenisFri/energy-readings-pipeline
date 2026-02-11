@@ -4,7 +4,6 @@ metadata:
   name: {{ include "energy-pipeline.fullname" . }}-config
   labels:
     {{- include "energy-pipeline.labels" . | nindent 4 }}
-    assignment-id: {{ .Values.assignmentId | quote }}
 data:
   REDIS_HOST: {{ include "energy-pipeline.redisHost" . | quote }}
   REDIS_PORT: "6379"

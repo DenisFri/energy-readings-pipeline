@@ -4,7 +4,6 @@ metadata:
   name: {{ include "energy-pipeline.fullname" . }}-ingestion-api
   labels:
     {{- include "energy-pipeline.ingestionApi.labels" . | nindent 4 }}
-    assignment-id: {{ .Values.assignmentId | quote }}
 spec:
   type: {{ .Values.ingestionApi.service.type }}
   ports:

@@ -12,7 +12,7 @@ keda:
 ingestionApi:
   replicaCount: 1
   image:
-    repository: us-central1-docker.pkg.dev/steam-shape-482523-f5/energy-repo/ingestion-api
+    repository: energy-pipeline/ingestion-api
     tag: latest
     pullPolicy: IfNotPresent
   service:

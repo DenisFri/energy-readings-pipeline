@@ -4,7 +4,6 @@ metadata:
   name: {{ include "energy-pipeline.fullname" . }}-processing-service
   labels:
     {{- include "energy-pipeline.processingService.labels" . | nindent 4 }}
-    assignment-id: {{ .Values.assignmentId | quote }}
 spec:
   type: {{ .Values.processingService.service.type }}
   ports:

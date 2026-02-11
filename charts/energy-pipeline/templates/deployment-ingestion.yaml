@@ -4,7 +4,6 @@ metadata:
   name: {{ include "energy-pipeline.fullname" . }}-ingestion-api
   labels:
     {{- include "energy-pipeline.ingestionApi.labels" . | nindent 4 }}
-    assignment-id: {{ .Values.assignmentId | quote }}
 spec:
   replicas: {{ .Values.ingestionApi.replicaCount }}
   selector:
@@ -14,7 +13,6 @@ spec:
     metadata:
       labels:
         {{- include "energy-pipeline.ingestionApi.labels" . | nindent 8 }}
-        assignment-id: {{ .Values.assignmentId | quote }}
     spec:
       containers:
         - name: ingestion-api

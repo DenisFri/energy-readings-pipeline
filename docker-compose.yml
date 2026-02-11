@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  ingestion-api:
+    build: ./ingestion-api
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_STREAM: energy_readings
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  processing-service:
+    build: ./processing-service
+    ports:
+      - "8001:8001"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_STREAM: energy_readings
+      CONSUMER_GROUP: processing_group
+      CONSUMER_NAME: processor-local
+    depends_on:
+      redis:
+        condition: service_healthy

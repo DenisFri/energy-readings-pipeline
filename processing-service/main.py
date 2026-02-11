@@ -107,13 +107,15 @@ async def consume_stream():
 
     while True:
         try:
-            # Read new messages from the stream
-            messages = redis_client.xreadgroup(
+            # Run the blocking XREADGROUP call in a thread so the async
+            # event loop stays free to serve HTTP requests (/health, /sites, etc.)
+            messages = await asyncio.to_thread(
+                redis_client.xreadgroup,
                 CONSUMER_GROUP,
                 CONSUMER_NAME,
                 {REDIS_STREAM: ">"},
                 count=10,
-                block=5000,
+                block=2000,
             )
 
             if messages:

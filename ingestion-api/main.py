@@ -4,9 +4,7 @@ Accepts energy readings and pushes them to a Redis stream.
 """
 
 import os
-import json
 from datetime import datetime
-from typing import Optional
 
 import redis
 from fastapi import FastAPI, HTTPException
@@ -49,7 +47,6 @@ class ReadingResponse(BaseModel):
 
     status: str
     stream_id: str
-    message: str
 
 
 class HealthResponse(BaseModel):
@@ -94,9 +91,8 @@ async def ingest_reading(reading: EnergyReading):
         stream_id = redis_client.xadd(REDIS_STREAM, stream_data)
 
         return ReadingResponse(
-            status="success",
+            status="accepted",
             stream_id=stream_id,
-            message="Reading successfully ingested",
         )
 
     except redis.ConnectionError as e:

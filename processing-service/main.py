@@ -5,12 +5,14 @@ using a consumer group and processes the readings.
 """
 
 import os
+import json
 import asyncio
 import logging
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 import redis
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,11 +49,22 @@ def ensure_consumer_group():
             raise
 
 
+def _timestamp_to_score(ts: str) -> float:
+    """Convert ISO 8601 timestamp string to epoch float for sorted set scoring."""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, AttributeError):
+        return 0.0
+
+
 async def process_reading(stream_id: str, data: dict):
     """
-    Process a single energy reading.
+    Process a single energy reading by storing it in Redis keyed by site_id.
 
-    This is a skeleton implementation. Add your processing logic here.
+    Uses a Redis sorted set per site (key: site:{site_id}:readings) with the
+    timestamp as the score, enabling natural time-based ordering and efficient
+    range queries.
 
     Args:
         stream_id: The Redis stream entry ID
@@ -59,25 +72,27 @@ async def process_reading(stream_id: str, data: dict):
     """
     logger.info(f"Processing reading {stream_id}: {data}")
 
-    # TODO: Implement your processing logic here
-    # Examples:
-    # - Store in a time-series database
-    # - Calculate aggregations
-    # - Detect anomalies
-    # - Trigger alerts
-
     site_id = data.get("site_id")
-    device_id = data.get("device_id")
-    power_reading = float(data.get("power_reading", 0))
-    timestamp = data.get("timestamp")
+    if not site_id:
+        logger.warning(f"Missing site_id in reading {stream_id}, skipping storage")
+        return
 
-    # Placeholder processing - simulate some work
-    await asyncio.sleep(0.01)
+    # Build the reading record to store
+    reading = {
+        "stream_id": stream_id,
+        "site_id": site_id,
+        "device_id": data.get("device_id"),
+        "power_reading": float(data.get("power_reading", 0)),
+        "timestamp": data.get("timestamp"),
+        "ingested_at": data.get("ingested_at"),
+    }
 
-    logger.info(
-        f"Processed reading for site={site_id}, device={device_id}, "
-        f"power={power_reading}W at {timestamp}"
-    )
+    # Store in a Redis sorted set keyed by site_id, scored by timestamp
+    redis_key = f"site:{site_id}:readings"
+    score = _timestamp_to_score(data.get("timestamp", ""))
+    redis_client.zadd(redis_key, {json.dumps(reading): score})
+
+    logger.info(f"Stored reading for site={site_id} in {redis_key}")
 
 
 async def consume_stream():
@@ -167,6 +182,21 @@ async def health_check():
         "consumer_name": CONSUMER_NAME,
         "consumer_group": CONSUMER_GROUP,
     }
+
+
+@app.get("/sites/{site_id}/readings")
+async def get_site_readings(site_id: str):
+    """Return all stored readings for the given site."""
+    redis_key = f"site:{site_id}:readings"
+    try:
+        raw_readings = redis_client.zrange(redis_key, 0, -1)
+        readings = [json.loads(r) for r in raw_readings]
+        return {"site_id": site_id, "readings": readings}
+    except redis.ConnectionError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis connection error: {str(e)}",
+        )
 
 
 @app.get("/metrics")

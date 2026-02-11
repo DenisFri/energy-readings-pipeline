@@ -4,12 +4,12 @@ Background worker that reads from the energy_readings Redis stream
 using a consumer group and processes the readings.
 """
 
-import os
-import json
 import asyncio
+import json
 import logging
-from datetime import datetime
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 import redis
 from fastapi import FastAPI, HTTPException

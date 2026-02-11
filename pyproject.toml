@@ -1,0 +1,28 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["ingestion-api", "processing-service"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort (import sorting)
+    "N",   # pep8-naming
+    "UP",  # pyupgrade (modernise syntax for target Python version)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["main"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "ingestion-api/tests",
+    "processing-service/tests",
+]
+addopts = "-v"

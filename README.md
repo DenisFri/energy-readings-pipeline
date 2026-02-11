@@ -4,74 +4,13 @@ A cloud-native pipeline for ingesting and processing energy readings using FastA
 
 **Assignment ID:** `8d4e7f2a-5b3c-4a91-9e6d-1c8f0a2b3d4e`
 
-## Architecture
-
-```
-                    ┌──────────────────────┐
-                    │       Frontend       │
-                    │   (nginx + HTML/JS)  │
-                    └──────────┬───────────┘
-                               │ /api proxy
-                 ┌─────────────┴─────────────┐
-                 ▼                           ▼
-┌─────────────────────┐          ┌─────────────────────────┐
-│   Ingestion API     │          │   Processing Service    │
-│   POST /readings    │          │   GET /sites/{id}/...   │
-│   GET  /health      │          │   GET /health           │
-└────────┬────────────┘          └────────────┬────────────┘
-         │ XADD                     XREADGROUP │ ZADD
-         ▼                                     ▼
-┌──────────────────────────────────────────────────────────┐
-│                        Redis                             │
-│   Stream: energy_readings    Sorted Sets: site:*:readings│
-└──────────────────────────────────────────────────────────┘
-         ▲
-         │ pendingEntriesCount
-┌────────┴─────────┐
-│  KEDA Autoscaler │  ← scales Processing Service replicas
-└──────────────────┘
-```
 
 **Data flow:** Ingestion API receives readings via HTTP, publishes to a Redis Stream (`XADD`). Processing Service consumes from the stream via a consumer group (`XREADGROUP`), stores each reading in a Redis sorted set keyed by `site_id` (`ZADD`), and acknowledges the message (`XACK`). Readings are retrievable per site via `GET /sites/{site_id}/readings`.
 
-## Project Structure
-
-```
-.
-├── ingestion-api/
-│   ├── main.py              # FastAPI app — POST /readings, GET /health
-│   ├── Dockerfile           # Multi-stage build, python:3.12-slim
-│   └── requirements.txt
-├── processing-service/
-│   ├── main.py              # FastAPI app — consumer + GET /sites/{id}/readings
-│   ├── Dockerfile           # Multi-stage build, python:3.12-slim
-│   └── requirements.txt
-├── frontend/                # Frontend UI (bonus)
-├── charts/
-│   └── energy-pipeline/     # Helm chart (both services + Redis + KEDA)
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-├── .github/
-│   └── workflows/
-│       └── cd.yml           # CI/CD pipeline
-└── docker-compose.yml       # Local development (one-command startup)
-```
-
-## Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **Redis sorted sets** for storage | Readings stored per site (`site:{id}:readings`) with timestamp as score. Provides natural time-based ordering and supports future range queries via `ZRANGEBYSCORE`. |
-| **Multi-stage Docker builds** | Builder stage installs dependencies, runtime stage copies only installed packages. Keeps final images small and clean. |
-| **KEDA over HPA** | Scales on actual workload backlog (`pendingEntriesCount` in the consumer group), not lagging CPU/memory metrics. True event-driven autoscaling. |
-| **Conditional KEDA rendering** | Helm template wrapped in `{{- if .Values.keda.enabled }}` so the chart deploys cleanly on clusters without KEDA CRDs. |
-| **`asyncio.to_thread` for consumer** | The synchronous Redis `XREADGROUP(block=...)` is offloaded to a thread so the async event loop stays free to serve HTTP requests. |
-| **Bitnami Redis subchart** | Production-grade Redis deployment with sensible defaults, managed as a Helm dependency. |
 
 ## Quick Start (Docker Compose)
 
-The fastest way to run the full pipeline locally:
+Run the full pipeline locally:
 
 ```bash
 docker compose up --build

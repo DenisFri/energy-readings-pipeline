@@ -1,5 +1,3 @@
 venv
-*.lock
-.github
 .claude
 CLAUDE.md

@@ -1,0 +1,23 @@
+Energy Pipeline has been deployed!
+
+Assignment ID: {{ .Values.assignmentId }}
+
+To get the ingestion API URL:
+  export INGESTION_URL=$(kubectl get svc {{ include "energy-pipeline.fullname" . }}-ingestion-api -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  echo "Ingestion API: http://$INGESTION_URL/readings"
+
+To test the ingestion API locally (port-forward):
+  kubectl port-forward svc/{{ include "energy-pipeline.fullname" . }}-ingestion-api 8000:80
+
+  curl -X POST http://localhost:8000/readings \
+    -H "Content-Type: application/json" \
+    -d '{
+      "site_id": "site-001",
+      "device_id": "device-001",
+      "power_reading": 1500.5,
+      "timestamp": "2024-01-15T10:30:00Z"
+    }'
+
+To check processing service metrics:
+  kubectl port-forward svc/{{ include "energy-pipeline.fullname" . }}-processing-service 8001:80
+  curl http://localhost:8001/metrics

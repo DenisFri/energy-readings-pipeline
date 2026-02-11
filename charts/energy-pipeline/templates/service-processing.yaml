@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "energy-pipeline.fullname" . }}-processing-service
+  labels:
+    {{- include "energy-pipeline.processingService.labels" . | nindent 4 }}
+    assignment-id: {{ .Values.assignmentId | quote }}
+spec:
+  type: {{ .Values.processingService.service.type }}
+  ports:
+    - port: {{ .Values.processingService.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "energy-pipeline.processingService.selectorLabels" . | nindent 4 }}

@@ -1,0 +1,62 @@
+# Assignment ID
+assignmentId: "8d4e7f2a-5b3c-4a91-9e6d-1c8f0a2b3d4e"
+
+# Ingestion API configuration
+ingestionApi:
+  replicaCount: 1
+  image:
+    repository: us-central1-docker.pkg.dev/steam-shape-482523-f5/energy-repo/ingestion-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Processing Service configuration
+processingService:
+  replicaCount: 1
+  image:
+    repository: energy-pipeline/processing-service
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8001
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Redis configuration (Bitnami subchart)
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: false
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# Common configuration
+config:
+  redisStream: energy_readings
+  consumerGroup: processing_group

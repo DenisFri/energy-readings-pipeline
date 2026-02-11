@@ -1,0 +1,21 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .Release.Name }}-processing-scaler
+  labels:
+    assignment-id: {{ .Values.assignmentId | quote }}
+spec:
+  scaleTargetRef:
+    name: {{ include "energy-pipeline.fullname" . }}-processing-service
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  triggers:
+    - type: redis-streams
+      metadata:
+        stream: {{ .Values.config.redisStream | quote }}
+        consumerGroup: {{ .Values.config.consumerGroup | quote }}
+        # The scale threshold: scale up if pending messages > this value
+        pendingEntriesCount: {{ .Values.keda.threshold | quote }}
+        # Internal Redis service name created by Bitnami chart
+        host: {{ .Release.Name }}-redis-master
+        port: "6379"

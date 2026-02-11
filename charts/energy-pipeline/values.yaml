@@ -1,6 +1,13 @@
 # Assignment ID
 assignmentId: "8d4e7f2a-5b3c-4a91-9e6d-1c8f0a2b3d4e"
 
+# KEDA
+keda:
+  enabled: true
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  threshold: 5
+
 # Ingestion API configuration
 ingestionApi:
   replicaCount: 1

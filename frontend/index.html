@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Energy Readings Pipeline</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Oxygen, Ubuntu, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      line-height: 1.6;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 1.5rem 2rem;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    header p {
+      font-size: 0.85rem;
+      opacity: 0.75;
+      margin-top: 0.25rem;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      display: grid;
+      gap: 1.5rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      padding: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: #16213e;
+      border-bottom: 2px solid #e8ecf1;
+      padding-bottom: 0.5rem;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .form-group label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group input {
+      padding: 0.6rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      transition: border-color 0.2s;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: #0f3460;
+      box-shadow: 0 0 0 3px rgba(15, 52, 96, 0.1);
+    }
+
+    .btn {
+      padding: 0.65rem 1.25rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: #0f3460;
+      color: #fff;
+      margin-top: 1rem;
+    }
+
+    .btn-primary:hover {
+      background: #1a4a7a;
+    }
+
+    .btn-secondary {
+      background: #e94560;
+      color: #fff;
+    }
+
+    .btn-secondary:hover {
+      background: #d63851;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .fetch-row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-end;
+    }
+
+    .fetch-row .form-group {
+      flex: 1;
+    }
+
+    .toast {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      display: none;
+    }
+
+    .toast.success {
+      display: block;
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .toast.error {
+      display: block;
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      font-size: 0.85rem;
+    }
+
+    thead th {
+      background: #f7f8fa;
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid #e8ecf1;
+    }
+
+    tbody td {
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    tbody tr:hover {
+      background: #f7f8fa;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 2rem;
+      color: #999;
+      font-size: 0.9rem;
+    }
+
+    .readings-count {
+      font-size: 0.8rem;
+      color: #888;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 600px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+      .fetch-row {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Energy Readings Pipeline</h1>
+    <p>Ingest and query energy meter readings</p>
+  </header>
+
+  <main>
+    <!-- Send Reading Card -->
+    <section class="card">
+      <h2>Send Reading</h2>
+      <form id="readingForm">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="siteId">Site ID</label>
+            <input type="text" id="siteId" placeholder="site-001" required />
+          </div>
+          <div class="form-group">
+            <label for="deviceId">Device ID</label>
+            <input type="text" id="deviceId" placeholder="meter-42" required />
+          </div>
+          <div class="form-group">
+            <label for="powerReading">Power Reading (W)</label>
+            <input
+              type="number"
+              id="powerReading"
+              placeholder="1500.5"
+              step="0.1"
+              min="0"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="timestamp">Timestamp</label>
+            <input type="datetime-local" id="timestamp" required />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" id="submitBtn">
+          Submit Reading
+        </button>
+      </form>
+      <div id="submitToast" class="toast"></div>
+    </section>
+
+    <!-- Fetch Readings Card -->
+    <section class="card">
+      <h2>Site Readings</h2>
+      <div class="fetch-row">
+        <div class="form-group">
+          <label for="querySiteId">Site ID</label>
+          <input type="text" id="querySiteId" placeholder="site-001" />
+        </div>
+        <button class="btn btn-secondary" id="fetchBtn">Fetch</button>
+      </div>
+      <div id="fetchToast" class="toast"></div>
+      <div id="readingsContainer">
+        <div class="empty-state">Enter a Site ID and click Fetch to view readings.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API_BASE = "";
+
+    // Set timestamp to now on load
+    document.getElementById("timestamp").value = new Date()
+      .toISOString()
+      .slice(0, 16);
+
+    // --- Submit Reading ---
+    document
+      .getElementById("readingForm")
+      .addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("submitBtn");
+        const toast = document.getElementById("submitToast");
+        btn.disabled = true;
+        btn.textContent = "Sending...";
+        toast.className = "toast";
+
+        const ts = document.getElementById("timestamp").value;
+        const payload = {
+          site_id: document.getElementById("siteId").value.trim(),
+          device_id: document.getElementById("deviceId").value.trim(),
+          power_reading: parseFloat(
+            document.getElementById("powerReading").value
+          ),
+          timestamp: new Date(ts).toISOString(),
+        };
+
+        try {
+          const res = await fetch(`${API_BASE}/api/readings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const data = await res.json();
+
+          if (res.ok) {
+            toast.className = "toast success";
+            toast.textContent = `Accepted — Stream ID: ${data.stream_id}`;
+          } else {
+            toast.className = "toast error";
+            toast.textContent = `Error ${res.status}: ${JSON.stringify(data.detail || data)}`;
+          }
+        } catch (err) {
+          toast.className = "toast error";
+          toast.textContent = `Network error: ${err.message}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Submit Reading";
+        }
+      });
+
+    // --- Fetch Readings ---
+    document.getElementById("fetchBtn").addEventListener("click", async () => {
+      const siteId = document.getElementById("querySiteId").value.trim();
+      const container = document.getElementById("readingsContainer");
+      const toast = document.getElementById("fetchToast");
+      const btn = document.getElementById("fetchBtn");
+      toast.className = "toast";
+
+      if (!siteId) {
+        toast.className = "toast error";
+        toast.textContent = "Please enter a Site ID.";
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Loading...";
+
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/sites/${encodeURIComponent(siteId)}/readings`
+        );
+        const data = await res.json();
+
+        if (!res.ok) {
+          toast.className = "toast error";
+          toast.textContent = `Error ${res.status}: ${JSON.stringify(data.detail || data)}`;
+          return;
+        }
+
+        const readings = data.readings || [];
+
+        if (readings.length === 0) {
+          container.innerHTML =
+            '<div class="empty-state">No readings found for this site.</div>';
+          return;
+        }
+
+        let html = `
+          <p class="readings-count">${readings.length} reading(s) for <strong>${escapeHtml(data.site_id)}</strong></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Device</th>
+                <th>Power (W)</th>
+                <th>Stream ID</th>
+              </tr>
+            </thead>
+            <tbody>`;
+
+        for (const r of readings) {
+          html += `
+              <tr>
+                <td>${escapeHtml(r.timestamp || "—")}</td>
+                <td>${escapeHtml(r.device_id || "—")}</td>
+                <td>${r.power_reading != null ? r.power_reading : "—"}</td>
+                <td><code>${escapeHtml(r.stream_id || "—")}</code></td>
+              </tr>`;
+        }
+
+        html += "</tbody></table>";
+        container.innerHTML = html;
+      } catch (err) {
+        toast.className = "toast error";
+        toast.textContent = `Network error: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Fetch";
+      }
+    });
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.appendChild(document.createTextNode(str));
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

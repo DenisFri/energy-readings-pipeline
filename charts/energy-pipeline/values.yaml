@@ -65,6 +65,20 @@ frontend:
       cpu: 25m
       memory: 32Mi
 
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: energy.frishchin.com
+  tls: []
+    # - secretName: energy-pipeline-tls
+    #   hosts:
+    #     - energy.frishchin.com
+
 # Redis configuration (Bitnami subchart)
 redis:
   enabled: true

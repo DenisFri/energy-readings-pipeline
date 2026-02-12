@@ -318,10 +318,14 @@ Write-Info "ScaledObject:"
 kubectl get scaledobject -n $Namespace
 
 Write-Info "HPA (created by KEDA):"
-$hpaOutput = kubectl get hpa -n $Namespace 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host $hpaOutput
-} else {
+try {
+    $hpaOutput = kubectl get hpa -n $Namespace 2>&1
+    if ($LASTEXITCODE -eq 0 -and $hpaOutput -notmatch "No resources found") {
+        Write-Host $hpaOutput
+    } else {
+        Write-Host "  No HPA found (KEDA may not have created one yet)"
+    }
+} catch {
     Write-Host "  No HPA found (KEDA may not have created one yet)"
 }
 

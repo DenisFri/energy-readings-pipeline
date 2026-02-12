@@ -13,7 +13,7 @@ spec:
   triggers:
     - type: redis-streams
       metadata:
-        address: {{ include "energy-pipeline.redisHost" . }}:6379
+        address: {{ include "energy-pipeline.redisHost" . }}.{{ .Release.Namespace }}.svc.cluster.local:6379
         stream: {{ .Values.config.redisStream | quote }}
         consumerGroup: {{ .Values.config.consumerGroup | quote }}
         pendingEntriesCount: {{ .Values.keda.threshold | quote }}

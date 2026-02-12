@@ -46,6 +46,25 @@ processingService:
       cpu: 50m
       memory: 64Mi
 
+# Frontend configuration
+frontend:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: energy-pipeline/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    limits:
+      cpu: 50m
+      memory: 64Mi
+    requests:
+      cpu: 25m
+      memory: 32Mi
+
 # Redis configuration (Bitnami subchart)
 redis:
   enabled: true

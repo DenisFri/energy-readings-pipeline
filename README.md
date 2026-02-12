@@ -2,27 +2,23 @@
 
 A cloud-native pipeline for ingesting and processing energy readings using FastAPI, Redis Streams, and Kubernetes.
 
-**Assignment ID:** `8d4e7f2a-5b3c-4a91-9e6d-1c8f0a2b3d4e`
-
+**Live demo:** [energy.frishchin.com](https://energy.frishchin.com)
 
 **Data flow:** Ingestion API receives readings via HTTP, publishes to a Redis Stream (`XADD`). Processing Service consumes from the stream via a consumer group (`XREADGROUP`), stores each reading in a Redis sorted set keyed by `site_id` (`ZADD`), and acknowledges the message (`XACK`). Readings are retrievable per site via `GET /sites/{site_id}/readings`.
 
-
-## Quick Start (Docker Compose)
-
-Run the full pipeline locally:
+## Quick Start
 
 ```bash
 docker compose up --build
 ```
 
-This starts Redis, Ingestion API (port 8000), and Processing Service (port 8001).
+This starts Redis, Ingestion API (port 8000), Processing Service (port 8001), and Frontend (port 3000).
 
-**Test the pipeline:**
+Open **http://localhost:3000** to use the web UI, or test via CLI:
 
 ```bash
 # Send a reading
-curl -X POST http://localhost:8000/readings \
+curl -X POST http://localhost:3000/api/readings \
   -H "Content-Type: application/json" \
   -d '{
     "site_id": "site-001",
@@ -32,7 +28,7 @@ curl -X POST http://localhost:8000/readings \
   }'
 
 # Wait a moment for the consumer to process, then fetch readings
-curl http://localhost:8001/sites/site-001/readings
+curl http://localhost:3000/api/sites/site-001/readings
 ```
 
 **Stop:**
@@ -62,6 +58,7 @@ eval $(minikube docker-env)
 # 3. Build images
 docker build -t energy-pipeline/ingestion-api:latest ./ingestion-api
 docker build -t energy-pipeline/processing-service:latest ./processing-service
+docker build -t energy-pipeline/frontend:latest ./frontend
 
 # 4. Install Helm dependencies
 helm repo add bitnami https://charts.bitnami.com/bitnami
@@ -72,16 +69,10 @@ helm install energy-pipeline ./charts/energy-pipeline \
   --namespace energy-pipeline \
   --create-namespace
 
-# 6. Port-forward to access services
-kubectl port-forward svc/energy-pipeline-ingestion-api 8000:80 -n energy-pipeline &
-kubectl port-forward svc/energy-pipeline-processing-service 8001:80 -n energy-pipeline &
+# 6. Port-forward to access the frontend
+kubectl port-forward svc/energy-pipeline-frontend 3000:80 -n energy-pipeline
 
-# 7. Test (same curl commands as above)
-curl -X POST http://localhost:8000/readings \
-  -H "Content-Type: application/json" \
-  -d '{"site_id":"site-001","device_id":"meter-42","power_reading":1500.5,"timestamp":"2024-01-15T10:30:00Z"}'
-
-curl http://localhost:8001/sites/site-001/readings
+# 7. Open http://localhost:3000
 ```
 
 ### Cleanup
@@ -92,73 +83,7 @@ kubectl delete namespace energy-pipeline
 minikube stop
 ```
 
-## GKE Deployment
-
-### 1. Create a GKE Cluster
-
-```bash
-gcloud container clusters create energy-pipeline-cluster \
-  --zone us-central1-a \
-  --num-nodes 3 \
-  --machine-type e2-medium
-
-gcloud container clusters get-credentials energy-pipeline-cluster \
-  --zone us-central1-a
-```
-
-### 2. Push Images to Artifact Registry
-
-```bash
-# Create repo (once)
-gcloud artifacts repositories create energy-repo \
-  --repository-format=docker \
-  --location=us-central1
-
-# Configure Docker auth
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-# Build and push
-REGISTRY=us-central1-docker.pkg.dev/$PROJECT_ID/energy-repo
-
-docker build -t $REGISTRY/ingestion-api:latest ./ingestion-api
-docker build -t $REGISTRY/processing-service:latest ./processing-service
-docker push $REGISTRY/ingestion-api:latest
-docker push $REGISTRY/processing-service:latest
-```
-
-### 3. Deploy with Helm
-
-```bash
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm dependency update charts/energy-pipeline
-
-helm upgrade --install energy-pipeline ./charts/energy-pipeline \
-  --namespace energy-pipeline \
-  --create-namespace \
-  --set ingestionApi.image.repository=$REGISTRY/ingestion-api \
-  --set processingService.image.repository=$REGISTRY/processing-service
-```
-
-### 4. Install KEDA (optional, for autoscaling)
-
-```bash
-helm repo add kedacore https://kedacore.github.io/charts
-helm install keda kedacore/keda --namespace keda --create-namespace
-```
-
-If KEDA is not installed, set `keda.enabled=false` in values to skip the ScaledObject.
-
-### 5. GitHub Actions CI/CD
-
-Add these secrets to your GitHub repository:
-
-| Secret | Description |
-|--------|-------------|
-| `GKE_PROJECT` | Your GCP project ID |
-| `GKE_CLUSTER` | GKE cluster name |
-| `GKE_ZONE` | GKE cluster zone |
-
-Then uncomment the placeholder sections in `.github/workflows/cd.yml` to enable automated builds and deployments.
+> **Cloud deployment:** See [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md) for GKE with Artifact Registry and Cloudflare Tunnel setup.
 
 ## API Reference
 
@@ -241,6 +166,9 @@ Returns stream length, consumer group info, and pending message counts.
 |-------|---------|-------------|
 | `ingestionApi.replicaCount` | `1` | Ingestion API replicas |
 | `processingService.replicaCount` | `1` | Processing Service replicas |
+| `frontend.enabled` | `true` | Deploy frontend UI |
+| `ingress.enabled` | `false` | Deploy Kubernetes Ingress |
+| `cloudflare.enabled` | `false` | Deploy Cloudflare Tunnel connector |
 | `keda.enabled` | `true` | Enable KEDA autoscaler |
 | `keda.minReplicaCount` | `1` | Min processing replicas |
 | `keda.maxReplicaCount` | `3` | Max processing replicas |
@@ -248,3 +176,15 @@ Returns stream length, consumer group info, and pending message counts.
 | `redis.enabled` | `true` | Deploy Redis via Bitnami subchart |
 
 See `charts/energy-pipeline/values.yaml` for all configurable parameters.
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Redis Sorted Sets for storage | Natural time-ordering via timestamp scores; efficient range queries |
+| `asyncio.to_thread()` for XREADGROUP | Prevents synchronous Redis blocking the async event loop |
+| Consumer groups | Enable distributed processing and message acknowledgment |
+| Nginx reverse proxy in frontend | Eliminates CORS; single entry point for the UI |
+| KEDA over HPA | Scales on actual workload backlog (pending entries), not generic CPU/memory |
+| Plain HTML/JS frontend | No build step, tiny image, no over-engineering |
+| Cloudflare Tunnel over LoadBalancer | Zero-trust access without exposing public IPs |

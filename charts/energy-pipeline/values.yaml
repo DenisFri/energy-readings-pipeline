@@ -79,6 +79,31 @@ ingress:
     #   hosts:
     #     - energy.frishchin.com
 
+# Cloudflare Tunnel configuration
+# 1. Create a tunnel in the Cloudflare Zero Trust dashboard
+# 2. Add the tunnel token to a Kubernetes Secret:
+#    kubectl create secret generic cloudflare-tunnel-token \
+#      --from-literal=token=<YOUR_TUNNEL_TOKEN>
+# 3. Configure public hostnames in the dashboard to point to:
+#    - http://RELEASE-energy-pipeline-frontend:80  (for energy.frishchin.com)
+cloudflare:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: cloudflare/cloudflared
+    tag: latest
+    pullPolicy: IfNotPresent
+  tunnelToken:
+    existingSecret: cloudflare-tunnel-token
+    key: token
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
 # Redis configuration (Bitnami subchart)
 redis:
   enabled: true

@@ -1,0 +1,51 @@
+{{- if .Values.cloudflare.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "energy-pipeline.fullname" . }}-cloudflared
+  labels:
+    {{- include "energy-pipeline.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cloudflared
+spec:
+  replicas: {{ .Values.cloudflare.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "energy-pipeline.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cloudflared
+  template:
+    metadata:
+      labels:
+        {{- include "energy-pipeline.labels" . | nindent 8 }}
+        app.kubernetes.io/component: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: "{{ .Values.cloudflare.image.repository }}:{{ .Values.cloudflare.image.tag }}"
+          imagePullPolicy: {{ .Values.cloudflare.image.pullPolicy }}
+          args:
+            - tunnel
+            - --no-autoupdate
+            - run
+            - --token
+            - $(TUNNEL_TOKEN)
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cloudflare.tunnelToken.existingSecret }}
+                  key: {{ .Values.cloudflare.tunnelToken.key }}
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.cloudflare.resources | nindent 12 }}
+{{- end }}

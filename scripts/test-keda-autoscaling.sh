@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 #
-# KEDA Autoscaling Test
-# Floods the ingestion API with readings and monitors processing pod scaling.
+# KEDA Autoscaling Test (pendingEntriesCount)
+#
+# Tests KEDA autoscaling by injecting a processing delay, flooding
+# messages, and watching KEDA scale based on pendingEntriesCount.
+#
+# How it works:
+#   1. Injects PROCESSING_DELAY_MS into the processing service
+#      (each message takes N ms to ACK, so pending entries build up)
+#   2. Floods the ingestion API with messages
+#   3. Monitors replica scaling as pending entries exceed the threshold
+#   4. Removes the delay and reports results
 #
 # Usage:
-#   ./scripts/test-keda-autoscaling.sh [NAMESPACE] [TOTAL_MESSAGES] [INGRESS_URL]
+#   ./scripts/test-keda-autoscaling.sh [NAMESPACE] [TOTAL_MESSAGES] [INGRESS_URL] [DELAY_MS]
 #
 # Examples:
 #   ./scripts/test-keda-autoscaling.sh energy-pipeline 100
-#   ./scripts/test-keda-autoscaling.sh energy-pipeline 200 https://energy.frishchin.com
-#
-# When INGRESS_URL is provided, requests go through the frontend proxy (/api/readings).
-# When omitted, port-forwards directly to the ingestion API (/readings).
+#   ./scripts/test-keda-autoscaling.sh energy-pipeline 200 https://energy.frishchin.com 1000
 
 set -euo pipefail
 
 NAMESPACE="${1:-energy-pipeline}"
 TOTAL_MESSAGES="${2:-100}"
 INGRESS_URL="${3:-}"
+DELAY_MS="${4:-500}"
+
+DEPLOYMENT_NAME="energy-pipeline-processing-service"
+SCALED_OBJECT_NAME="energy-pipeline-processing-scaler"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -32,9 +42,10 @@ info()   { echo -e "${YELLOW}[INFO]${NC} $1"; }
 err()    { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # --- Preflight ---
-header "KEDA Autoscaling Test"
-echo "Namespace:       $NAMESPACE"
-echo "Total messages:  $TOTAL_MESSAGES"
+header "KEDA Autoscaling Test (pendingEntriesCount)"
+echo "Namespace:        $NAMESPACE"
+echo "Total messages:   $TOTAL_MESSAGES"
+echo "Processing delay: ${DELAY_MS}ms per message"
 echo ""
 
 header "Preflight Checks"
@@ -72,20 +83,19 @@ if [ -z "$INGRESS_URL" ]; then
     PORT_FORWARD_PID=$!
     sleep 3
     BASE_URL="http://localhost:8080"
-    # Direct to ingestion API: /readings
     READINGS_ENDPOINT="$BASE_URL/readings"
-    HEALTH_ENDPOINT="$BASE_URL/health"
     ok "Port forward active: $BASE_URL -> $INGEST_POD (direct to ingestion API)"
 else
     BASE_URL="${INGRESS_URL%/}"
-    # Through frontend nginx proxy: /api/readings -> /readings
     READINGS_ENDPOINT="$BASE_URL/api/readings"
-    HEALTH_ENDPOINT="$BASE_URL"
     ok "Using external URL: $BASE_URL (through frontend proxy)"
     info "Readings endpoint: $READINGS_ENDPOINT"
 fi
 
 cleanup() {
+    info "Removing processing delay..."
+    kubectl set env deployment/$DEPLOYMENT_NAME -n "$NAMESPACE" PROCESSING_DELAY_MS- 2>/dev/null || true
+    ok "Removed PROCESSING_DELAY_MS (processor back to full speed)"
     if [ -n "$PORT_FORWARD_PID" ]; then
         kill "$PORT_FORWARD_PID" 2>/dev/null || true
     fi
@@ -94,40 +104,43 @@ trap cleanup EXIT
 
 # --- Verify API ---
 header "Verifying API"
-if [ -z "$INGRESS_URL" ]; then
-    if curl -sf "$HEALTH_ENDPOINT" > /dev/null; then
-        ok "Ingestion API is reachable"
-    else
-        err "Cannot reach ingestion API at $HEALTH_ENDPOINT"
-        exit 1
-    fi
+PROBE_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST "$READINGS_ENDPOINT" \
+    -H "Content-Type: application/json" \
+    -d "{\"site_id\":\"probe-test\",\"device_id\":\"probe-1\",\"power_reading\":1.0,\"timestamp\":\"$PROBE_TS\"}")
+
+if [ "$HTTP_CODE" = "201" ]; then
+    ok "API working (HTTP 201)"
 else
-    if curl -sf "$HEALTH_ENDPOINT" > /dev/null; then
-        ok "Frontend reachable at $BASE_URL"
-    else
-        err "Cannot reach frontend at $HEALTH_ENDPOINT"
-        exit 1
-    fi
-    # Test the readings endpoint with a probe
-    info "Testing readings endpoint with a probe..."
-    PROBE_TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "$READINGS_ENDPOINT" \
-        -H "Content-Type: application/json" \
-        -d "{\"site_id\":\"probe-test\",\"device_id\":\"probe-1\",\"power_reading\":1.0,\"timestamp\":\"$PROBE_TS\"}")
-    if [ "$HTTP_CODE" = "201" ]; then
-        ok "Readings endpoint working (HTTP 201)"
-    else
-        err "Readings endpoint failed (HTTP $HTTP_CODE)"
-        err "URL: $READINGS_ENDPOINT"
-        info "Make sure the Cloudflare tunnel is routing to the frontend service."
-        exit 1
-    fi
+    err "API returned HTTP $HTTP_CODE at $READINGS_ENDPOINT"
+    exit 1
 fi
 
-# --- Flood ---
-header "Flooding Stream with $TOTAL_MESSAGES Messages"
-info "This will build a backlog that triggers KEDA to scale up processing pods..."
+# =====================================================================
+# PHASE 1: Inject processing delay
+# =====================================================================
+header "Phase 1: Injecting Processing Delay (${DELAY_MS}ms)"
+info "This slows down ACKs so pending entries accumulate naturally."
+info "KEDA will detect pendingEntriesCount > threshold and scale up."
+
+kubectl set env deployment/$DEPLOYMENT_NAME -n "$NAMESPACE" PROCESSING_DELAY_MS="$DELAY_MS" 2>/dev/null
+ok "Set PROCESSING_DELAY_MS=$DELAY_MS on $DEPLOYMENT_NAME"
+
+info "Waiting for rolling restart to complete..."
+kubectl rollout status deployment/$DEPLOYMENT_NAME -n "$NAMESPACE" --timeout=120s 2>/dev/null || {
+    err "Timeout waiting for rollout. Continuing anyway."
+}
+ok "Processing service restarted with ${DELAY_MS}ms delay"
+
+# Give the new pods a moment to connect to Redis and start consuming
+sleep 5
+
+# =====================================================================
+# PHASE 2: Flood
+# =====================================================================
+header "Phase 2: Flooding Stream with $TOTAL_MESSAGES Messages"
+info "With ${DELAY_MS}ms delay per message, pending entries will accumulate."
 info "Endpoint: $READINGS_ENDPOINT"
 echo ""
 
@@ -168,47 +181,71 @@ if [ "$SENT" -eq 0 ]; then
     exit 1
 fi
 
-# --- Monitor ---
-header "Monitoring KEDA Scaling (~2 minutes)"
+# Show pending entries
+kubectl exec -n "$NAMESPACE" sts/energy-pipeline-redis-master \
+    -- redis-cli XPENDING energy_readings processing_group 2>/dev/null || true
+
+# =====================================================================
+# PHASE 3: Monitor scaling
+# =====================================================================
+header "Phase 3: Monitoring KEDA Scaling (~3 minutes)"
 info "KEDA polls every 15-30s. Watch for replica count changes..."
 info "Press Ctrl+C to stop early."
 echo ""
 
-MAX_WAIT=120
+MAX_WAIT=180
 ELAPSED=0
 PREV_REPLICAS=-1
 SCALED_UP=false
+MAX_OBSERVED=0
+SCALE_UP_TIME=""
 
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-    REPLICAS=$(kubectl get deployment -n "$NAMESPACE" \
-        -l "app.kubernetes.io/component=processing-service" \
-        -o jsonpath="{.items[0].status.replicas}" 2>/dev/null || echo "?")
+    REPLICAS=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NAMESPACE" \
+        -o jsonpath="{.status.replicas}" 2>/dev/null || echo "?")
+    [ -z "$REPLICAS" ] && REPLICAS="0"
 
-    READY=$(kubectl get deployment -n "$NAMESPACE" \
-        -l "app.kubernetes.io/component=processing-service" \
-        -o jsonpath="{.items[0].status.readyReplicas}" 2>/dev/null || echo "0")
+    READY=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NAMESPACE" \
+        -o jsonpath="{.status.readyReplicas}" 2>/dev/null || echo "0")
     [ -z "$READY" ] && READY="0"
 
-    # HPA may not exist yet — handle gracefully
     HPA_DESIRED=$(kubectl get hpa -n "$NAMESPACE" \
         -o jsonpath="{.items[0].status.desiredReplicas}" 2>/dev/null || echo "n/a")
     [ -z "$HPA_DESIRED" ] && HPA_DESIRED="n/a"
 
+    # Check pending entries
+    PENDING=$(kubectl exec -n "$NAMESPACE" sts/energy-pipeline-redis-master \
+        -- redis-cli XPENDING energy_readings processing_group 2>/dev/null | head -1 || echo "?")
+    [ -z "$PENDING" ] && PENDING="?"
+
     NOW=$(date +"%H:%M:%S")
+
+    # Track max replicas
+    if [ "$REPLICAS" != "?" ] && [ "$REPLICAS" -gt "$MAX_OBSERVED" ] 2>/dev/null; then
+        MAX_OBSERVED="$REPLICAS"
+    fi
 
     if [ "$REPLICAS" != "?" ] && [ "$REPLICAS" != "$PREV_REPLICAS" ] && [ "$PREV_REPLICAS" != "-1" ]; then
         echo ""
         if [ "$REPLICAS" -gt "$PREV_REPLICAS" ] 2>/dev/null; then
-            echo -e "  ${GREEN}>>> SCALED UP: $PREV_REPLICAS -> $REPLICAS replicas <<<${NC}"
+            echo -e "  ${GREEN}** SCALED UP: $PREV_REPLICAS -> $REPLICAS replicas **${NC}"
             SCALED_UP=true
+            [ -z "$SCALE_UP_TIME" ] && SCALE_UP_TIME="$ELAPSED"
         elif [ "$REPLICAS" -lt "$PREV_REPLICAS" ] 2>/dev/null; then
-            echo -e "  ${MAGENTA}>>> SCALED DOWN: $PREV_REPLICAS -> $REPLICAS replicas <<<${NC}"
+            echo -e "  ${MAGENTA}** SCALED DOWN: $PREV_REPLICAS -> $REPLICAS replicas **${NC}"
         fi
     fi
     PREV_REPLICAS="$REPLICAS"
 
-    printf "\r  [%s] Replicas: %s/%s ready | HPA desired: %s | Elapsed: %ds  " \
-        "$NOW" "$READY" "$REPLICAS" "$HPA_DESIRED" "$ELAPSED"
+    printf "\r  [%s] Replicas: %s/%s | Pending: %s | HPA desired: %s | %ds  " \
+        "$NOW" "$READY" "$REPLICAS" "$PENDING" "$HPA_DESIRED" "$ELAPSED"
+
+    # Early exit after confirming scale-up
+    if [ "$MAX_OBSERVED" -gt 1 ] && [ -n "$SCALE_UP_TIME" ] && [ "$ELAPSED" -gt $((SCALE_UP_TIME + 30)) ]; then
+        echo ""
+        info "Scale-up confirmed. Stopping early."
+        break
+    fi
 
     sleep 5
     ELAPSED=$((ELAPSED + 5))
@@ -225,19 +262,29 @@ info "ScaledObject:"
 kubectl get scaledobject -n "$NAMESPACE"
 echo ""
 info "HPA (created by KEDA):"
-kubectl get hpa -n "$NAMESPACE" 2>/dev/null || echo "  No HPA found (KEDA may not have created one yet)"
+kubectl get hpa -n "$NAMESPACE" 2>/dev/null || echo "  No HPA found"
 
-if [ "$SCALED_UP" = true ]; then
+if [ "$SCALED_UP" = true ] && [ "$MAX_OBSERVED" -gt 1 ]; then
     echo ""
-    ok "SUCCESS: KEDA autoscaling worked! Pods scaled up in response to stream backlog."
+    echo -e "${GREEN}============================================================${NC}"
+    ok "SUCCESS: KEDA autoscaling verified!"
+    echo -e "${GREEN}  Max replicas observed: $MAX_OBSERVED (max configured: 3)${NC}"
+    [ -n "$SCALE_UP_TIME" ] && echo -e "${GREEN}  Scale-up triggered at: ${SCALE_UP_TIME}s into monitoring${NC}"
+    echo -e "${GREEN}  Trigger: pendingEntriesCount in consumer group${NC}"
+    echo -e "${GREEN}============================================================${NC}"
+elif [ "$SCALED_UP" = true ]; then
+    echo ""
+    info "KEDA scaled from 0 to 1 (minimum), but did not scale beyond 1."
+    info "Pending entries were consumed before exceeding the threshold."
+    info "Try increasing TOTAL_MESSAGES (e.g. 200) or DELAY_MS (e.g. 1000)."
 else
     echo ""
-    info "Pods didn't scale during the monitoring window."
-    info "Try: increasing messages (500+), or check:"
+    info "Pods did not scale during the monitoring window."
+    info "Debug:"
     echo "  kubectl describe scaledobject -n $NAMESPACE"
     echo "  kubectl logs -n keda -l app=keda-operator --tail=50"
 fi
 
 echo ""
 info "To clean up test data:"
-echo "  kubectl exec -n $NAMESPACE deploy/energy-pipeline-redis-master -- redis-cli DEL site:load-test-site-1:readings site:load-test-site-2:readings site:load-test-site-3:readings site:load-test-site-4:readings site:load-test-site-5:readings"
+echo "  kubectl exec -n $NAMESPACE sts/energy-pipeline-redis-master -- redis-cli DEL site:load-test-site-1:readings site:load-test-site-2:readings site:load-test-site-3:readings site:load-test-site-4:readings site:load-test-site-5:readings"

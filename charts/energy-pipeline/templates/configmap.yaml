@@ -9,3 +9,4 @@ data:
   REDIS_PORT: "6379"
   REDIS_STREAM: {{ .Values.config.redisStream | quote }}
   CONSUMER_GROUP: {{ .Values.config.consumerGroup | quote }}
+  PROCESSING_DELAY_MS: {{ .Values.config.processingDelayMs | default "0" | quote }}

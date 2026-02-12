@@ -125,3 +125,4 @@ redis:
 config:
   redisStream: energy_readings
   consumerGroup: processing_group
+  processingDelayMs: 0  # Set >0 to simulate slow processing (useful for KEDA testing)

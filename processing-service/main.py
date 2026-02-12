@@ -25,6 +25,7 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_STREAM = os.getenv("REDIS_STREAM", "energy_readings")
 CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "processing_group")
 CONSUMER_NAME = os.getenv("CONSUMER_NAME", os.getenv("HOSTNAME", "processor-1"))
+PROCESSING_DELAY_MS = int(os.getenv("PROCESSING_DELAY_MS", 0))
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
@@ -86,6 +87,10 @@ async def process_reading(stream_id: str, data: dict):
         "timestamp": data.get("timestamp"),
         "ingested_at": data.get("ingested_at"),
     }
+
+    # Optional processing delay to simulate heavy workloads (useful for KEDA testing)
+    if PROCESSING_DELAY_MS > 0:
+        await asyncio.sleep(PROCESSING_DELAY_MS / 1000.0)
 
     # Store in a Redis sorted set keyed by site_id, scored by timestamp
     redis_key = f"site:{site_id}:readings"

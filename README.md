@@ -2,7 +2,7 @@
 
 A cloud-native pipeline for ingesting and processing energy readings using FastAPI, Redis Streams, and Kubernetes.
 
-**Live demo:** [energy.frishchin.com](https://energy.frishchin.com)
+**Live demo:** [https://energy.frishchin.com](https://energy.frishchin.com)
 
 **Data flow:** Ingestion API receives readings via HTTP, publishes to a Redis Stream (`XADD`). Processing Service consumes from the stream via a consumer group (`XREADGROUP`), stores each reading in a Redis sorted set keyed by `site_id` (`ZADD`), and acknowledges the message (`XACK`). Readings are retrievable per site via `GET /sites/{site_id}/readings`.
 
@@ -185,6 +185,4 @@ See `charts/energy-pipeline/values.yaml` for all configurable parameters.
 | `asyncio.to_thread()` for XREADGROUP | Prevents synchronous Redis blocking the async event loop |
 | Consumer groups | Enable distributed processing and message acknowledgment |
 | Nginx reverse proxy in frontend | Eliminates CORS; single entry point for the UI |
-| KEDA over HPA | Scales on actual workload backlog (pending entries), not generic CPU/memory |
-| Plain HTML/JS frontend | No build step, tiny image, no over-engineering |
 | Cloudflare Tunnel over LoadBalancer | Zero-trust access without exposing public IPs |

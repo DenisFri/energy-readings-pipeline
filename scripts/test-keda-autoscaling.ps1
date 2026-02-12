@@ -207,7 +207,7 @@ for ($batch = 0; $batch -lt $totalBatches; $batch++) {
     }
 
     $pct = [Math]::Round(($sent + $errors) / $TotalMessages * 100, 0)
-    Write-Host "`r  Sent: $sent / $TotalMessages ($pct%%) | Errors: $errors" -NoNewline
+    Write-Host "`r  Sent: $sent / $TotalMessages (${pct}%) | Errors: $errors" -NoNewline
 }
 
 $stopwatch.Stop()
@@ -287,10 +287,10 @@ while ($elapsed -lt $maxWait) {
             Write-Host ""
             try {
                 if ([int]$replicas -gt [int]$prevReplicas) {
-                    Write-Host "  >>> SCALED UP: $prevReplicas -> $replicas replicas <<<" -ForegroundColor Green
+                    Write-Host "  ** SCALED UP: $prevReplicas -> $replicas replicas **" -ForegroundColor Green
                     $scaledUp = $true
                 } elseif ([int]$replicas -lt [int]$prevReplicas) {
-                    Write-Host "  >>> SCALED DOWN: $prevReplicas -> $replicas replicas <<<" -ForegroundColor Magenta
+                    Write-Host "  ** SCALED DOWN: $prevReplicas -> $replicas replicas **" -ForegroundColor Magenta
                 }
             } catch {}
         }

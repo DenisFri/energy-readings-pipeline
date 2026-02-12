@@ -7,16 +7,16 @@
 .DESCRIPTION
     This script:
     1. Checks KEDA is installed and the ScaledObject exists
-    2. Shows current state (replicas, stream pending count)
+    2. Scales the processing service to 0 so messages pile up
     3. Floods the ingestion API with readings to build a backlog
-    4. Monitors pod scaling in real-time
-    5. Waits for scale-down after backlog is cleared
+    4. Restores the processor and monitors KEDA-driven scaling
+    5. Reports whether scale-up was observed
 
 .PARAMETER Namespace
     Kubernetes namespace where the release is deployed (default: energy-pipeline)
 
 .PARAMETER TotalMessages
-    Number of readings to send (default: 100)
+    Number of readings to send (default: 50)
 
 .PARAMETER ConcurrentBatches
     Number of parallel batches to send at once (default: 10)
@@ -34,12 +34,13 @@
 
 param(
     [string]$Namespace = "energy-pipeline",
-    [int]$TotalMessages = 100,
+    [int]$TotalMessages = 50,
     [int]$ConcurrentBatches = 10,
     [string]$IngressUrl = ""
 )
 
 $ErrorActionPreference = "Stop"
+$DeploymentName = "energy-pipeline-processing-service"
 
 # --- Colors & helpers ---
 function Write-Header($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
@@ -54,7 +55,6 @@ Write-Host "Total messages:  $TotalMessages"
 Write-Host "Concurrency:     $ConcurrentBatches"
 Write-Host ""
 
-# Check KEDA CRDs exist
 Write-Header "Preflight Checks"
 
 $kedaCRD = kubectl get crd scaledobjects.keda.sh --no-headers 2>&1
@@ -66,13 +66,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "KEDA CRDs found"
 
-# Check ScaledObject exists
 $scaledObj = kubectl get scaledobject -n $Namespace --no-headers 2>&1
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($scaledObj)) {
     Write-Err "No ScaledObject found in namespace '$Namespace'. Make sure keda.enabled=true in values.yaml"
     exit 1
 }
-Write-Ok "ScaledObject found: $($scaledObj.Trim())"
+Write-Ok "ScaledObject found"
 
 # --- Show Initial State ---
 Write-Header "Initial State"
@@ -83,26 +82,18 @@ kubectl get pods -n $Namespace -l "app.kubernetes.io/component=processing-servic
 Write-Info "ScaledObject status:"
 kubectl get scaledobject -n $Namespace
 
-# Check ScaledObject health
-Write-Info "ScaledObject events (last 5):"
-kubectl get events -n $Namespace --field-selector involvedObject.kind=ScaledObject --sort-by='.lastTimestamp' 2>&1 | Select-Object -Last 6
-
 # --- Setup Port Forward or External URL ---
 $portForwardJob = $null
 $ReadingsEndpoint = ""
-$HealthEndpoint = ""
 
 if ([string]::IsNullOrWhiteSpace($IngressUrl)) {
     Write-Header "Setting Up Port Forward"
-
-    # Find ingestion-api pod
     $ingestPod = kubectl get pods -n $Namespace -l "app.kubernetes.io/component=ingestion-api" -o jsonpath="{.items[0].metadata.name}" 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Cannot find ingestion-api pod in namespace '$Namespace'"
         exit 1
     }
 
-    # Port forward in background (directly to ingestion-api service)
     $portForwardJob = Start-Job -ScriptBlock {
         param($ns, $pod)
         kubectl port-forward -n $ns $pod 8080:8000
@@ -110,33 +101,27 @@ if ([string]::IsNullOrWhiteSpace($IngressUrl)) {
 
     Start-Sleep -Seconds 3
     $BaseUrl = "http://localhost:8080"
-    # Direct to ingestion API: paths are /readings and /health
     $ReadingsEndpoint = "$BaseUrl/readings"
     $HealthEndpoint = "$BaseUrl/health"
-    Write-Ok "Port forward active: $BaseUrl -> $ingestPod (direct to ingestion API)"
+    Write-Ok "Port forward active: $BaseUrl -> $ingestPod"
 } else {
     $BaseUrl = $IngressUrl.TrimEnd("/")
-    # Through frontend nginx proxy: /api/readings -> /readings
     $ReadingsEndpoint = "$BaseUrl/api/readings"
-    $HealthEndpoint = "$BaseUrl"  # Frontend serves HTML at /
+    $HealthEndpoint = "$BaseUrl"
     Write-Ok "Using external URL: $BaseUrl (through frontend proxy)"
     Write-Info "Readings endpoint: $ReadingsEndpoint"
 }
 
-# --- Verify API is reachable ---
+# --- Verify API ---
 Write-Header "Verifying API"
 try {
     if ([string]::IsNullOrWhiteSpace($IngressUrl)) {
-        # Direct port-forward: check /health
         $health = Invoke-RestMethod -Uri $HealthEndpoint -Method Get -TimeoutSec 10
         Write-Ok "Ingestion API healthy: $($health.status)"
     } else {
-        # External URL: test with a simple GET to the frontend
-        $response = Invoke-WebRequest -Uri $HealthEndpoint -Method Get -TimeoutSec 10 -UseBasicParsing
-        if ($response.StatusCode -eq 200) {
-            Write-Ok "Frontend reachable at $BaseUrl"
-        }
-        # Also test the /api/readings endpoint with a test POST
+        $null = Invoke-WebRequest -Uri $HealthEndpoint -Method Get -TimeoutSec 10 -UseBasicParsing
+        Write-Ok "Frontend reachable at $BaseUrl"
+
         Write-Info "Testing readings endpoint with a probe..."
         $probeBody = @{
             site_id       = "probe-test"
@@ -145,31 +130,38 @@ try {
             timestamp     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
         } | ConvertTo-Json
 
-        try {
-            $probeResult = Invoke-RestMethod -Uri $ReadingsEndpoint `
-                -Method Post `
-                -ContentType "application/json" `
-                -Body $probeBody `
-                -TimeoutSec 10
-            Write-Ok "Readings endpoint working: stream_id=$($probeResult.stream_id)"
-        } catch {
-            Write-Err "Readings endpoint failed: $($_.Exception.Message)"
-            Write-Err "URL: $ReadingsEndpoint"
-            Write-Info "Make sure the Cloudflare tunnel is routing to the frontend service."
-            if ($portForwardJob) { Stop-Job $portForwardJob; Remove-Job $portForwardJob }
-            exit 1
-        }
+        $probeResult = Invoke-RestMethod -Uri $ReadingsEndpoint `
+            -Method Post -ContentType "application/json" -Body $probeBody -TimeoutSec 10
+        Write-Ok "Readings endpoint working: stream_id=$($probeResult.stream_id)"
     }
 } catch {
-    Write-Err "Cannot reach API at $HealthEndpoint"
-    Write-Err $_.Exception.Message
+    Write-Err "Cannot reach API: $($_.Exception.Message)"
     if ($portForwardJob) { Stop-Job $portForwardJob; Remove-Job $portForwardJob }
     exit 1
 }
 
-# --- Flood the Stream ---
-Write-Header "Flooding Stream with $TotalMessages Messages"
-Write-Info "This will build a backlog that triggers KEDA to scale up processing pods..."
+# =======================================================================
+# PHASE 1: Pause the processor so messages pile up in the stream
+# =======================================================================
+Write-Header "Phase 1: Pausing Processing Service"
+Write-Info "Scaling processing service to 0 replicas so messages accumulate..."
+
+# Pause the KEDA ScaledObject so it doesn't fight our manual scale
+kubectl annotate scaledobject -n $Namespace energy-pipeline-processing-scaler `
+    autoscaling.keda.sh/paused-replicas="0" --overwrite 2>&1 | Out-Null
+Write-Ok "KEDA ScaledObject paused (annotated with paused-replicas=0)"
+
+# Scale to 0
+kubectl scale deployment $DeploymentName -n $Namespace --replicas=0 2>&1 | Out-Null
+Write-Info "Waiting for processor pods to terminate..."
+kubectl wait --for=delete pod -n $Namespace -l "app.kubernetes.io/component=processing-service" --timeout=30s 2>&1 | Out-Null
+Write-Ok "Processing service scaled to 0 — no consumers running"
+
+# =======================================================================
+# PHASE 2: Flood the stream (all messages become pending)
+# =======================================================================
+Write-Header "Phase 2: Flooding Stream with $TotalMessages Messages"
+Write-Info "With no consumers, all messages will pile up as pending entries..."
 Write-Info "Endpoint: $ReadingsEndpoint"
 Write-Host ""
 
@@ -178,7 +170,6 @@ $errors = 0
 $lastError = ""
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-# Send in batches
 $batchSize = $ConcurrentBatches
 $totalBatches = [Math]::Ceiling($TotalMessages / $batchSize)
 
@@ -200,10 +191,7 @@ for ($batch = 0; $batch -lt $totalBatches; $batch++) {
             param($endpoint, $jsonBody)
             try {
                 $response = Invoke-RestMethod -Uri $endpoint `
-                    -Method Post `
-                    -ContentType "application/json" `
-                    -Body $jsonBody `
-                    -TimeoutSec 30
+                    -Method Post -ContentType "application/json" -Body $jsonBody -TimeoutSec 30
                 return @{ success = $true; stream_id = $response.stream_id }
             } catch {
                 return @{ success = $false; error = $_.Exception.Message }
@@ -211,17 +199,11 @@ for ($batch = 0; $batch -lt $totalBatches; $batch++) {
         } -ArgumentList $ReadingsEndpoint, $body
     }
 
-    # Wait for batch to complete
     $results = $jobs | Wait-Job | Receive-Job
     $jobs | Remove-Job
 
     foreach ($r in $results) {
-        if ($r.success) {
-            $sent++
-        } else {
-            $errors++
-            $lastError = $r.error
-        }
+        if ($r.success) { $sent++ } else { $errors++; $lastError = $r.error }
     }
 
     $pct = [Math]::Round(($sent + $errors) / $TotalMessages * 100, 0)
@@ -234,56 +216,73 @@ Write-Ok "Flood complete: $sent sent, $errors errors in $([Math]::Round($stopwat
 if ($sent -gt 0) {
     Write-Host "  Rate: $([Math]::Round($sent / $stopwatch.Elapsed.TotalSeconds, 1)) msg/s"
 }
-if ($errors -gt 0 -and $lastError) {
-    Write-Err "Last error: $lastError"
-}
+if ($errors -gt 0 -and $lastError) { Write-Err "Last error: $lastError" }
 
 if ($sent -eq 0) {
-    Write-Err "No messages were sent successfully. Cannot test scaling."
-    Write-Info "Check that the ingestion API is reachable and Redis is running."
+    Write-Err "No messages sent. Restoring processor and exiting."
+    kubectl annotate scaledobject -n $Namespace energy-pipeline-processing-scaler `
+        autoscaling.keda.sh/paused-replicas- --overwrite 2>&1 | Out-Null
+    kubectl scale deployment $DeploymentName -n $Namespace --replicas=1 2>&1 | Out-Null
     if ($portForwardJob) { Stop-Job $portForwardJob; Remove-Job $portForwardJob }
     exit 1
 }
 
-# --- Monitor Scaling ---
-Write-Header "Monitoring KEDA Scaling (watching for ~2 minutes)"
-Write-Info "KEDA polls every ~15-30s. Watch for replica count changes..."
+# Check stream length
+Write-Info "Checking stream backlog..."
+$streamLen = kubectl exec -n $Namespace deploy/energy-pipeline-redis-master -- redis-cli XLEN energy_readings 2>&1
+Write-Ok "Stream length (total messages in stream): $($streamLen.Trim())"
+
+# Check pending entries count for the consumer group
+$pendingInfo = kubectl exec -n $Namespace deploy/energy-pipeline-redis-master -- redis-cli XPENDING energy_readings processing_group 2>&1
+Write-Info "Consumer group pending info:"
+Write-Host "  $pendingInfo"
+
+# =======================================================================
+# PHASE 3: Un-pause KEDA and let it scale
+# =======================================================================
+Write-Header "Phase 3: Resuming KEDA — Watching for Autoscaling"
+Write-Info "Removing paused annotation from ScaledObject..."
+Write-Info "KEDA will detect the $sent pending entries (threshold: 5) and scale up..."
+
+# Remove the paused annotation so KEDA takes control
+kubectl annotate scaledobject -n $Namespace energy-pipeline-processing-scaler `
+    autoscaling.keda.sh/paused-replicas- --overwrite 2>&1 | Out-Null
+Write-Ok "KEDA ScaledObject un-paused — KEDA is now in control"
+
+Write-Host ""
+Write-Info "Monitoring replica count (KEDA polls every ~15-30s)..."
 Write-Info "Press Ctrl+C to stop monitoring early."
 Write-Host ""
 
-$maxWait = 120  # seconds
+$maxWait = 180  # 3 minutes
 $elapsed = 0
 $prevReplicas = -1
 $scaledUp = $false
+$maxObservedReplicas = 0
 
 while ($elapsed -lt $maxWait) {
-    # Get current replica count
-    $replicas = kubectl get deployment -n $Namespace `
-        -l "app.kubernetes.io/component=processing-service" `
-        -o jsonpath="{.items[0].status.replicas}" 2>&1
+    $replicas = kubectl get deployment $DeploymentName -n $Namespace `
+        -o jsonpath="{.status.replicas}" 2>&1
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($replicas)) { $replicas = "0" }
 
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($replicas)) { $replicas = "?" }
-
-    $readyReplicas = kubectl get deployment -n $Namespace `
-        -l "app.kubernetes.io/component=processing-service" `
-        -o jsonpath="{.items[0].status.readyReplicas}" 2>&1
-
+    $readyReplicas = kubectl get deployment $DeploymentName -n $Namespace `
+        -o jsonpath="{.status.readyReplicas}" 2>&1
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($readyReplicas)) { $readyReplicas = "0" }
 
-    # Get HPA info (KEDA creates an HPA) — may not exist yet
     $hpaDesired = "n/a"
     try {
         $hpaResult = kubectl get hpa -n $Namespace -o jsonpath="{.items[0].status.desiredReplicas}" 2>&1
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($hpaResult)) {
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($hpaResult) -and $hpaResult -notmatch "error") {
             $hpaDesired = $hpaResult
         }
-    } catch {
-        $hpaDesired = "n/a"
-    }
+    } catch {}
 
     $timestamp = (Get-Date).ToString("HH:mm:ss")
 
-    if ($replicas -ne "?" -and $replicas -ne $prevReplicas) {
+    # Track max replicas
+    try { if ([int]$replicas -gt $maxObservedReplicas) { $maxObservedReplicas = [int]$replicas } } catch {}
+
+    if ($replicas -ne $prevReplicas) {
         if ($prevReplicas -ne -1) {
             Write-Host ""
             try {
@@ -293,9 +292,7 @@ while ($elapsed -lt $maxWait) {
                 } elseif ([int]$replicas -lt [int]$prevReplicas) {
                     Write-Host "  >>> SCALED DOWN: $prevReplicas -> $replicas replicas <<<" -ForegroundColor Magenta
                 }
-            } catch {
-                # Ignore parse errors
-            }
+            } catch {}
         }
         $prevReplicas = $replicas
     }
@@ -306,7 +303,7 @@ while ($elapsed -lt $maxWait) {
     $elapsed += 5
 }
 
-Write-Host ""
+Write-Host "`n"
 
 # --- Final State ---
 Write-Header "Final State"
@@ -323,30 +320,27 @@ try {
     if ($LASTEXITCODE -eq 0 -and $hpaOutput -notmatch "No resources found") {
         Write-Host $hpaOutput
     } else {
-        Write-Host "  No HPA found (KEDA may not have created one yet)"
+        Write-Host "  No HPA found"
     }
 } catch {
-    Write-Host "  No HPA found (KEDA may not have created one yet)"
+    Write-Host "  No HPA found"
 }
 
-Write-Info "ScaledObject details:"
+Write-Info "ScaledObject conditions:"
 kubectl describe scaledobject -n $Namespace 2>&1 | Select-String -Pattern "Type|Status|Message|Reason|Ready|Active" | Select-Object -First 10
 
 if ($scaledUp) {
     Write-Host ""
-    Write-Ok "SUCCESS: KEDA autoscaling worked! Pods scaled up in response to stream backlog."
+    Write-Host "============================================================" -ForegroundColor Green
+    Write-Ok "SUCCESS: KEDA autoscaling verified!"
+    Write-Host "  Max replicas observed: $maxObservedReplicas (limit: 3)" -ForegroundColor Green
+    Write-Host "  KEDA detected $sent pending entries and scaled processing pods." -ForegroundColor Green
+    Write-Host "============================================================" -ForegroundColor Green
 } else {
     Write-Host ""
     Write-Info "Pods didn't scale during the monitoring window."
-    Write-Info "This could mean:"
-    Write-Info "  - Processing was fast enough to keep up (no backlog > threshold of 5)"
-    Write-Info "  - KEDA polling interval hasn't triggered yet (try waiting longer)"
-    Write-Info "  - ScaledObject is not READY (check events below)"
-    Write-Info "  - Try increasing -TotalMessages (e.g. 500)"
-    Write-Host ""
     Write-Info "Debug commands:"
     Write-Host "  kubectl describe scaledobject -n $Namespace"
-    Write-Host "  kubectl get events -n $Namespace --field-selector involvedObject.kind=ScaledObject"
     Write-Host "  kubectl logs -n keda -l app=keda-operator --tail=50"
 }
 
@@ -358,13 +352,6 @@ if ($portForwardJob) {
     Write-Ok "Port forward stopped"
 }
 
-Write-Info "Load test data was written to sites: load-test-site-1 through load-test-site-5"
-Write-Info "To clean up test data, you can delete those keys from Redis:"
+Write-Info "Load test data in sites: load-test-site-1 through load-test-site-5"
+Write-Info "To clean up test data from Redis:"
 Write-Host "  kubectl exec -n $Namespace deploy/energy-pipeline-redis-master -- redis-cli DEL site:load-test-site-1:readings site:load-test-site-2:readings site:load-test-site-3:readings site:load-test-site-4:readings site:load-test-site-5:readings"
-
-Write-Host ""
-Write-Info "To keep monitoring manually:"
-Write-Host "  kubectl get pods -n $Namespace -l app.kubernetes.io/component=processing-service -w"
-Write-Host "  kubectl get hpa -n $Namespace -w"
-Write-Host "  kubectl describe scaledobject -n $Namespace"
-Write-Host "  kubectl logs -n keda -l app=keda-operator --tail=50"

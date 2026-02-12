@@ -55,6 +55,10 @@ docker push $REGISTRY/frontend:latest
 helm repo add bitnami https://charts.bitnami.com/bitnami
 helm dependency update charts/energy-pipeline
 
+# Ensure REGISTRY is set (re-export if new terminal session)
+export PROJECT_ID=$(gcloud config get-value project)
+export REGISTRY=us-central1-docker.pkg.dev/$PROJECT_ID/energy-repo
+
 helm upgrade --install energy-pipeline ./charts/energy-pipeline \
   --namespace default \
   --set ingestionApi.image.repository=$REGISTRY/ingestion-api \
@@ -97,7 +101,11 @@ If KEDA is not installed, set `keda.enabled=false` in values to skip the ScaledO
 ## 5. Expose via Cloudflare Tunnel (optional)
 
 ```bash
-# Create the tunnel token secret
+# Ensure REGISTRY is set (if new terminal session)
+export PROJECT_ID=$(gcloud config get-value project)
+export REGISTRY=us-central1-docker.pkg.dev/$PROJECT_ID/energy-repo
+
+# Create the tunnel token secret in the energy-pipeline namespace
 kubectl create secret generic cloudflare-tunnel-token \
   --from-literal=token=<YOUR_TUNNEL_TOKEN>
 
@@ -114,7 +122,11 @@ helm upgrade energy-pipeline ./charts/energy-pipeline \
   --set redis.image.tag=latest
 ```
 
-Then configure the public hostname in the Cloudflare Zero Trust dashboard to point to `http://energy-pipeline-frontend:80`.
+> **Important:** Every `helm upgrade` must include all `--set` flags. Helm resets omitted values to defaults, which would revert image repositories to local names and cause `InvalidImageName` errors.
+
+Then configure the public hostname in the Cloudflare Zero Trust dashboard to point to `http://energy-pipeline-frontend.energy-pipeline:80`.
+
+> **Note:** Since the tunnel now runs in the `energy-pipeline` namespace, the service URL must include the namespace suffix (`.energy-pipeline`). If the tunnel runs in the same namespace as the services, you can use just `http://energy-pipeline-frontend:80`.
 
 ## 6. GitHub Actions CI/CD
 

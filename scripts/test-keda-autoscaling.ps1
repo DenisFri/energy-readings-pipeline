@@ -207,7 +207,7 @@ for ($batch = 0; $batch -lt $totalBatches; $batch++) {
     }
 
     $pct = [Math]::Round(($sent + $errors) / $TotalMessages * 100, 0)
-    Write-Host "`r  Sent: $sent / $TotalMessages (${pct}%) | Errors: $errors" -NoNewline
+    Write-Host -NoNewline ("`r  Sent: {0} / {1} ({2}%) | Errors: {3}" -f $sent, $TotalMessages, $pct, $errors)
 }
 
 $stopwatch.Stop()
@@ -338,7 +338,7 @@ if ($scaledUp) {
     Write-Host "============================================================" -ForegroundColor Green
 } else {
     Write-Host ""
-    Write-Info "Pods didn't scale during the monitoring window."
+    Write-Info "Pods did not scale during the monitoring window."
     Write-Info "Debug commands:"
     Write-Host "  kubectl describe scaledobject -n $Namespace"
     Write-Host "  kubectl logs -n keda -l app=keda-operator --tail=50"

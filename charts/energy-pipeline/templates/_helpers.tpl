@@ -82,6 +82,22 @@ app.kubernetes.io/component: processing-service
 {{- end }}
 
 {{/*
+Frontend labels
+*/}}
+{{- define "energy-pipeline.frontend.labels" -}}
+{{ include "energy-pipeline.labels" . }}
+app.kubernetes.io/component: frontend
+{{- end }}
+
+{{/*
+Frontend selector labels
+*/}}
+{{- define "energy-pipeline.frontend.selectorLabels" -}}
+{{ include "energy-pipeline.selectorLabels" . }}
+app.kubernetes.io/component: frontend
+{{- end }}
+
+{{/*
 Redis host
 */}}
 {{- define "energy-pipeline.redisHost" -}}
